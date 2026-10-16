@@ -1,0 +1,18 @@
+On-device face verification models
+==================================
+
+YuNet face detector:
+- Source: https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet
+- Model: face_detection_yunet_2023mar_int8bq.onnx
+- License: MIT; see YUNET-MIT-LICENSE.txt
+
+SFace face recognizer:
+- Source: https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface
+- Model: face_recognition_sface_2021dec_int8bq.onnx
+- License: Apache-2.0; see SFACE-APACHE-2.0-LICENSE.txt
+
+The model repository's license notices do not establish the training-data
+provenance or consent basis for this checkpoint. This integration is an
+experimental prototype, not approved for production biometric use.
+It does not implement liveness or presentation-attack detection. Do not rely
+on a match as the sole child-safety or boarding control.
