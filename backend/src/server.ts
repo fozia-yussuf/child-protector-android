@@ -5,6 +5,7 @@ import { loadConfig } from "./config";
 import { createPool } from "./db";
 import { runMigrations } from "./migrate";
 import { RealtimeHub } from "./realtime";
+import { ZodError } from "zod";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -37,6 +38,10 @@ async function main(): Promise<void> {
 }
 
 void main().catch((error: unknown) => {
-  console.error("Service startup failed", error instanceof Error ? error.name : "UnknownError");
+  if (error instanceof ZodError) {
+    console.error("Service startup failed: configuration validation error", error.issues.map((issue) => ({ field: issue.path.join("."), message: issue.message })));
+  } else {
+    console.error("Service startup failed", error instanceof Error ? error.message : "UnknownError");
+  }
   process.exitCode = 1;
 });
