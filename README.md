@@ -4,6 +4,42 @@ Child Protector is a native Android application and Node.js API for school trans
 
 ## Architecture
 
+## Application Screenshots
+
+The screenshots below show the Child Protector Android application. They are loaded from image files already stored in this repository.
+
+<table>
+  <tr>
+    <td align="center"><img src="./WhatsApp%20Image%202026-10-22%20at%2022.25.10.jpeg" alt="Child Protector screenshot 1" width="280"><br><sub>Screenshot 1</sub></td>
+    <td align="center"><img src="./WhatsApp%20Image%202026-10-22%20at%2022.25.11%20(1).jpeg" alt="Child Protector screenshot 2" width="280"><br><sub>Screenshot 2</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="./WhatsApp%20Image%202026-10-22%20at%2022.25.11%20(2).jpeg" alt="Child Protector screenshot 3" width="280"><br><sub>Screenshot 3</sub></td>
+    <td align="center"><img src="./WhatsApp%20Image%202026-10-22%20at%2022.25.11.jpeg" alt="Child Protector screenshot 4" width="280"><br><sub>Screenshot 4</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="./WhatsApp%20Image%202026-10-22%20at%2022.25.12%20(1).jpeg" alt="Child Protector screenshot 5" width="280"><br><sub>Screenshot 5</sub></td>
+    <td align="center"><img src="./WhatsApp%20Image%202026-10-22%20at%2022.25.12%20(2).jpeg" alt="Child Protector screenshot 6" width="280"><br><sub>Screenshot 6</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="./WhatsApp%20Image%202026-10-22%20at%2022.25.12%20(3).jpeg" alt="Child Protector screenshot 7" width="280"><br><sub>Screenshot 7</sub></td>
+    <td align="center"><img src="./WhatsApp%20Image%202026-10-22%20at%2022.25.12.jpeg" alt="Child Protector screenshot 8" width="280"><br><sub>Screenshot 8</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="./WhatsApp%20Image%202026-10-22%20at%2022.25.13%20(1).jpeg" alt="Child Protector screenshot 9" width="280"><br><sub>Screenshot 9</sub></td>
+    <td align="center"><img src="./WhatsApp%20Image%202026-10-22%20at%2022.25.13%20(2).jpeg" alt="Child Protector screenshot 10" width="280"><br><sub>Screenshot 10</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="./WhatsApp%20Image%202026-10-22%20at%2022.25.13.jpeg" alt="Child Protector screenshot 11" width="280"><br><sub>Screenshot 11</sub></td>
+    <td align="center"><img src="./WhatsApp%20Image%202026-10-22%20at%2022.25.14%20(1).jpeg" alt="Child Protector screenshot 12" width="280"><br><sub>Screenshot 12</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="./WhatsApp%20Image%202026-10-22%20at%2022.25.14.jpeg" alt="Child Protector screenshot 13" width="280"><br><sub>Screenshot 13</sub></td>
+    <td></td>
+  </tr>
+</table>
+
+
 ```text
 app/                         Android application (Kotlin, Jetpack Compose, Material 3)
   src/main/java/.../Api.kt   HTTPS API client, bearer authorization, encrypted sessions
