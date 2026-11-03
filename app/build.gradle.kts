@@ -5,12 +5,32 @@ plugins {
 }
 
 android { namespace = "com.childprotector.app"; compileSdk = 35
-    defaultConfig { applicationId = "com.childprotector.app"; minSdk = 26; targetSdk = 35; versionCode = 1; versionName = "1.0" }
+    val apiBaseUrl = providers.gradleProperty("API_BASE_URL").get().trimEnd('/')
+    val apiAuthority = apiBaseUrl.removePrefix("https://").substringBefore('/')
+    require(
+        apiBaseUrl.startsWith("https://") &&
+                apiAuthority.isNotBlank() &&
+                '@' !in apiAuthority &&
+                '?' !in apiBaseUrl &&
+                '#' !in apiBaseUrl &&
+                apiBaseUrl.none(Char::isWhitespace)
+    ) { "API_BASE_URL must be an HTTPS URL with a host and no embedded credentials" }
+    defaultConfig {
+        applicationId = "com.childprotector.app"
+        minSdk = 26
+        targetSdk = 35
+        versionCode = 1
+        versionName = "1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
     buildFeatures { compose = true; buildConfig = true }
     buildTypes { release { isMinifyEnabled = false } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
-    defaultConfig { buildConfigField("String", "API_BASE_URL", "\"https://api-v2.appdeploy.ai/app/child-protector-6dys9t\"") }
+    defaultConfig { buildConfigField("String", "API_BASE_URL", "\"$apiBaseUrl\"") }
+    testOptions {
+        animationsDisabled = true
+    }
 }
 
 dependencies {
@@ -30,4 +50,19 @@ dependencies {
     implementation("com.google.android.gms:play-services-location:21.3.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("io.mockk:mockk:1.13.16")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.test:core:1.6.1")
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation(platform("androidx.compose:compose-bom:2024.12.01"))
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("io.mockk:mockk-android:1.13.16")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
