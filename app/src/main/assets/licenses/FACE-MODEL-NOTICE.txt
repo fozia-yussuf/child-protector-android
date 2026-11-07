@@ -3,12 +3,12 @@ On-device face verification models
 
 YuNet face detector:
 - Source: https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet
-- Model: face_detection_yunet_2023mar_int8bq.onnx
+- Model: face_detection_yunet_2023mar.onnx (FP32, non-quantized)
 - License: MIT; see YUNET-MIT-LICENSE.txt
 
 SFace face recognizer:
 - Source: https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface
-- Model: face_recognition_sface_2021dec_int8bq.onnx
+- Model: face_recognition_sface_2021dec.onnx (FP32, non-quantized)
 - License: Apache-2.0; see SFACE-APACHE-2.0-LICENSE.txt
 
 The model repository's license notices do not establish the training-data

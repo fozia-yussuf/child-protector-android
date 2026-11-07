@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,8 +39,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import kotlinx.coroutines.CancellationException
+import java.io.File
+import java.util.UUID
 
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -135,8 +140,8 @@ private fun AdminStudentsScreen(vm: AppVM) {
     var query by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
-    var editing by remember { mutableStateOf<JSONObject?>(null) }
-    var creating by remember { mutableStateOf(false) }
+    var editingId by rememberSaveable { mutableStateOf<String?>(null) }
+    var creating by rememberSaveable { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<JSONObject?>(null) }
     val scope = rememberCoroutineScope()
 
@@ -161,6 +166,7 @@ private fun AdminStudentsScreen(vm: AppVM) {
             child.optString(key).contains(query, ignoreCase = true)
         }
     }
+    val editing = editingId?.let { id -> vm.children.find { it.optString("id") == id } }
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -185,7 +191,7 @@ private fun AdminStudentsScreen(vm: AppVM) {
                     Text(child.optString("name"), fontWeight = FontWeight.Bold)
                     Text("${child.optString("studentId")} · ${child.optString("className")} · ${child.optString("route")}")
                     Row {
-                        TextButton(onClick = { editing = child }) { Text("Edit") }
+                        TextButton(onClick = { editingId = child.optString("id") }) { Text("Edit") }
                         TextButton(onClick = { deleting = child }) { Text("Delete") }
                     }
                 }
@@ -196,8 +202,8 @@ private fun AdminStudentsScreen(vm: AppVM) {
         StudentEditorDialog(
             vm,
             editing,
-            onDismiss = { creating = false; editing = null },
-            onSaved = { creating = false; editing = null; reload() },
+            onDismiss = { creating = false; editingId = null },
+            onSaved = { creating = false; editingId = null; reload() },
             onError = { error = it }
         )
     }
@@ -232,15 +238,20 @@ private fun StudentEditorDialog(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var name by remember(child) { mutableStateOf(child?.optString("name").orEmpty()) }
-    var studentId by remember(child) { mutableStateOf(child?.optString("studentId").orEmpty()) }
-    var className by remember(child) { mutableStateOf(child?.optString("className").orEmpty()) }
-    var route by remember(child) { mutableStateOf(child?.optString("route").orEmpty()) }
-    var photo by remember(child) { mutableStateOf<Bitmap?>(null) }
-    var consent by remember(child) { mutableStateOf(false) }
+    val childId = child?.optString("id")
+    var name by rememberSaveable(childId) { mutableStateOf(child?.optString("name").orEmpty()) }
+    var studentId by rememberSaveable(childId) { mutableStateOf(child?.optString("studentId").orEmpty()) }
+    var className by rememberSaveable(childId) { mutableStateOf(child?.optString("className").orEmpty()) }
+    var route by rememberSaveable(childId) { mutableStateOf(child?.optString("route").orEmpty()) }
+    var photoPath by rememberSaveable(childId) { mutableStateOf<String?>(null) }
+    val photo = remember(photoPath) { photoPath?.let(BitmapFactory::decodeFile) }
+    var parents by remember(childId) { mutableStateOf(emptyList<JSONObject>()) }
+    var selectedParentId by rememberSaveable(childId) { mutableStateOf("") }
+    var consent by rememberSaveable(childId) { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    var capturingPhoto by remember { mutableStateOf(false) }
     var loadingExisting by remember(child) { mutableStateOf(child != null) }
-    var error by remember { mutableStateOf("") }
+    var error by rememberSaveable(childId) { mutableStateOf("") }
     LaunchedEffect(child?.optString("id")) {
         if (child != null) {
             loadingExisting = true
@@ -255,16 +266,44 @@ private fun StudentEditorDialog(
             } finally {
                 loadingExisting = false
             }
+        } else {
+            try {
+                parents = vm.apiClient().adminParents()
+            } catch (exception: Exception) {
+                error = "Parent accounts could not be loaded. You can link one later in Parent Access. " +
+                        (exception.message ?: "Please try again.")
+            }
         }
     }
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicturePreview()
     ) { bitmap ->
-        photo = bitmap
-        if (bitmap == null) error = "Photo capture failed or was cancelled."
+        if (bitmap == null) {
+            capturingPhoto = false
+            error = "Photo capture failed or was cancelled."
+        } else {
+            scope.launch {
+                try {
+                    val capturedPath = withContext(Dispatchers.IO) {
+                        persistStudentPhotoCapture(context, bitmap)
+                    }
+                    photoPath?.let { File(it).delete() }
+                    photoPath = capturedPath
+                    error = ""
+                } catch (exception: Exception) {
+                    error = exception.message ?: "Could not save captured photo."
+                } finally {
+                    capturingPhoto = false
+                }
+            }
+        }
+    }
+    fun dismissEditor() {
+        photoPath?.let { File(it).delete() }
+        onDismiss()
     }
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = ::dismissEditor,
         title = { Text(if (child == null) "Register student" else "Edit student") },
         text = {
             Column {
@@ -272,11 +311,47 @@ private fun StudentEditorDialog(
                 OutlinedTextField(studentId, { studentId = it }, label = { Text("Student ID") }, enabled = child == null)
                 OutlinedTextField(className, { className = it }, label = { Text("Class") })
                 OutlinedTextField(route, { route = it }, label = { Text("Route") })
+                if (child == null) {
+                    if (parents.isNotEmpty()) {
+                        Choice(
+                            "Parent account (optional)",
+                            parents.map { it.optString("id") to it.optString("username") },
+                            selectedParentId
+                        ) { selectedParentId = it }
+                        Text(
+                            "Linking a parent lets them see this child, attendance, route GPS, and arrival updates.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                    } else if (error.isBlank()) {
+                        Text(
+                            "No parent accounts found. Create the parent account first, then link it here or in Parent Access.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                    }
+                }
                 if (loadingExisting) CircularProgressIndicator()
-                TextButton(onClick = { launcher.launch() }) {
+                TextButton(
+                    enabled = !busy && !capturingPhoto,
+                    onClick = {
+                        capturingPhoto = true
+                        error = ""
+                        try {
+                            launcher.launch()
+                        } catch (exception: Exception) {
+                            capturingPhoto = false
+                            error = exception.message ?: "No camera app is available."
+                        }
+                    }
+                ) {
                     Text(if (photo == null) "Take or replace photo" else "Retake photo")
                 }
                 photo?.let { Image(it.asImageBitmap(), "Student photo", Modifier.size(72.dp)) }
+                if (capturingPhoto) CircularProgressIndicator()
+                if (photoPath != null && photo == null) {
+                    Text("Captured photo could not be restored. Please retake it.", color = MaterialTheme.colorScheme.error)
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(consent, { consent = it })
                     Text("Parent consent obtained")
@@ -286,19 +361,25 @@ private fun StudentEditorDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = !busy && !loadingExisting && name.isNotBlank() && studentId.isNotBlank() &&
+                enabled = !busy && !capturingPhoto && !loadingExisting && name.isNotBlank() && studentId.isNotBlank() &&
+                        (photoPath == null || photo != null) &&
                         (child != null || photo != null && consent) &&
                         (photo == null || consent),
                 onClick = {
                     scope.launch {
                         busy = true
                         try {
-                            val encoded = photo?.let { validateAndEncodeStudentPhoto(context, it) }
+                            val encoded = photo?.let { bitmap ->
+                                withContext(Dispatchers.Default) {
+                                    validateAndEncodeStudentPhoto(context, bitmap)
+                                }
+                            }
                             if (child == null) {
                                 vm.apiClient().createChild(
                                     name, studentId, className, route,
                                     encoded ?: error("A validated student photo is required."),
-                                    null,
+                                    parents.find { it.optString("id") == selectedParentId }
+                                        ?.optString("username"),
                                     consent
                                 )
                             } else {
@@ -306,6 +387,7 @@ private fun StudentEditorDialog(
                                     child.optString("id"), name, className, route, encoded, consent
                                 )
                             }
+                            photoPath?.let { File(it).delete() }
                             onSaved()
                         } catch (exception: Exception) {
                             error = exception.message ?: "Could not save student."
@@ -317,6 +399,23 @@ private fun StudentEditorDialog(
                 }
             ) { Text(if (busy) "Saving..." else "Save") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+        dismissButton = { TextButton(onClick = ::dismissEditor) { Text("Cancel") } }
     )
+}
+
+private fun persistStudentPhotoCapture(context: android.content.Context, bitmap: Bitmap): String {
+    val directory = File(context.filesDir, "student-photo-captures")
+    check(directory.isDirectory || directory.mkdirs()) { "Could not prepare photo storage." }
+    val file = File(directory, "${UUID.randomUUID()}.jpg")
+    try {
+        file.outputStream().use { output ->
+            check(bitmap.compress(Bitmap.CompressFormat.JPEG, 90, output)) {
+                "Could not save captured photo."
+            }
+        }
+        return file.absolutePath
+    } catch (exception: Exception) {
+        file.delete()
+        throw exception
+    }
 }

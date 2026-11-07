@@ -96,11 +96,23 @@ fun BoardTab(vm: AppVM) {
     var scanSubmitted by remember { mutableStateOf(false) }
     var showFaceAbout by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
+    var arrivalBusy by remember { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
     val selectedChild = vm.children.find { it.optString("id") == student }
     val registeredPhoto = selectedChild?.optString("photo").orEmpty()
         .takeUnless { it.isBlank() || it == "null" }.orEmpty()
+    val destination = if (phase.contains("MORNING", ignoreCase = true)) "SCHOOL" else "HOME"
+    val hasBoardingScan = vm.scans.any {
+        it.optString("studentId") == student &&
+                it.optString("tripId") == trip &&
+                it.optString("phase") == phase
+    }
+    val arrivalRecorded = vm.arrivals.any {
+        it.optString("studentId") == student &&
+                it.optString("tripId") == trip &&
+                it.optString("destination") == destination
+    }
 
     val cam = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -305,6 +317,50 @@ fun BoardTab(vm: AppVM) {
                         }
                     }
                 )
+
+                if (scanSubmitted || hasBoardingScan) {
+                    Spacer(Modifier.height(8.dp))
+                    if (arrivalRecorded) {
+                        Text(
+                            "Arrival at ${destination.lowercase()} recorded. Linked parent accounts can see this update.",
+                            color = CutePurplePrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    } else {
+                        Button(
+                            enabled = !busy && !arrivalBusy && student.isNotBlank() && trip.isNotBlank(),
+                            onClick = {
+                                scope.launch {
+                                    arrivalBusy = true
+                                    try {
+                                        val arrival = vm.apiClient().confirmArrival(trip, student, destination)
+                                        vm.arrivals = listOf(arrival) + vm.arrivals.filterNot {
+                                            it.optString("id") == arrival.optString("id")
+                                        }
+                                        vm.message =
+                                            "Arrival at ${destination.lowercase()} recorded. Linked parents can see this update."
+                                        vm.refresh()
+                                    } catch (exception: Exception) {
+                                        vm.message = exception.message ?: "Could not record student arrival."
+                                    } finally {
+                                        arrivalBusy = false
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                if (arrivalBusy) "Saving arrival..."
+                                else "Confirm ${destination.lowercase()} arrival"
+                            )
+                        }
+                        Text(
+                            "Tap only after the student reaches ${destination.lowercase()}.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                    }
+                }
 
                 if (vm.message.isNotBlank()) {
                     Spacer(Modifier.height(6.dp))
@@ -644,22 +700,27 @@ fun GpsTab(vm: AppVM) {
 
             Spacer(Modifier.height(8.dp))
 
+            val uploadAge = if (lastUpload == 0L) Long.MAX_VALUE
+            else (gpsNow - lastUpload).coerceAtLeast(0L)
             Text(
-                if (running)
-                    "✓ Driver GPS broadcasting active to active trip."
-                else
-                    "Select an active trip and tap Initiate Live GPS Tracking.",
-                color = if (running) CutePurplePrimary else Color.Gray,
+                when {
+                    !running -> "GPS publishing is stopped. Start an active trip and initiate GPS tracking."
+                    lastUpload == 0L -> "GPS service started; waiting for a location fix and successful upload."
+                    uploadAge > 120_000L -> "GPS service is active, but the last uploaded location is stale."
+                    else -> "✓ GPS location recently uploaded to the active trip."
+                },
+                color = if (running && uploadAge <= 120_000L) CutePurplePrimary
+                else if (gpsError.isNotBlank()) MaterialTheme.colorScheme.error else Color.Gray,
                 fontWeight = FontWeight.Bold
             )
             Text(
                 if (lastUpload == 0L) "Last upload unavailable · STALE"
                 else {
-                    val age = (gpsNow - lastUpload).coerceAtLeast(0L)
+                    val age = uploadAge
                     "Last upload ${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(lastUpload))} " +
                             "(${age / 60_000} min ago)" + if (age > 120_000L) " · STALE" else ""
                 },
-                color = if (lastUpload == 0L || gpsNow - lastUpload > 120_000L) {
+                color = if (lastUpload == 0L || uploadAge > 120_000L) {
                     MaterialTheme.colorScheme.error
                 } else {
                     MaterialTheme.colorScheme.onSurface

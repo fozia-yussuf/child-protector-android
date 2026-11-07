@@ -10,6 +10,7 @@ import androidx.camera.core.ImageProxy
 import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
 import org.opencv.core.Core
+import org.opencv.core.CvException
 import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.MatOfByte
@@ -22,6 +23,14 @@ import org.opencv.objdetect.FaceDetectorYN
 import org.opencv.objdetect.FaceRecognizerSF
 import java.io.File
 import java.io.FileOutputStream
+
+private const val YUNET_MODEL_ASSET = "models/face_detection_yunet_2023mar.onnx"
+private const val YUNET_MODEL_CACHE_FILE = "yunet-fp32-2023mar.onnx"
+private const val SFACE_MODEL_ASSET = "models/face_recognition_sface_2021dec.onnx"
+private const val SFACE_MODEL_CACHE_FILE = "sface-fp32-2021dec.onnx"
+
+internal fun photoBase64Payload(photo: String): String =
+    photo.substringAfter("base64,", missingDelimiterValue = photo).trim()
 
 data class FaceMatchStatus(
     val message: String,
@@ -210,7 +219,7 @@ class OnDeviceFaceMatchAnalyzer(
     }
 
     private fun loadModelsAndReference(): Boolean {
-        val encodedPhoto = registeredPhotoDataUrl.substringAfter("base64,", "")
+        val encodedPhoto = photoBase64Payload(registeredPhotoDataUrl)
         if (encodedPhoto.isBlank()) {
             failed = true
             report("This student has no registered photo. Use manual override only after visual verification.")
@@ -226,13 +235,13 @@ class OnDeviceFaceMatchAnalyzer(
         val modelDirectory = File(appContext.filesDir, "face-models").apply { mkdirs() }
         val detectorPath = copyFaceModelAsset(
             appContext,
-            "models/face_detection_yunet_2023mar_int8bq.onnx",
-            File(modelDirectory, "yunet.onnx")
+            YUNET_MODEL_ASSET,
+            File(modelDirectory, YUNET_MODEL_CACHE_FILE)
         )
         val recognizerPath = copyFaceModelAsset(
             appContext,
-            "models/face_recognition_sface_2021dec_int8bq.onnx",
-            File(modelDirectory, "sface.onnx")
+            SFACE_MODEL_ASSET,
+            File(modelDirectory, SFACE_MODEL_CACHE_FILE)
         )
         detector = FaceDetectorYN.create(
             detectorPath,
@@ -361,17 +370,25 @@ fun validateAndEncodeStudentPhoto(context: Context, bitmap: Bitmap): String {
     }
     val detectorPath = copyFaceModelAsset(
         context.applicationContext,
-        "models/face_detection_yunet_2023mar_int8bq.onnx",
-        File(modelDirectory, "yunet.onnx")
+        YUNET_MODEL_ASSET,
+        File(modelDirectory, YUNET_MODEL_CACHE_FILE)
     )
-    val detector = FaceDetectorYN.create(
-        detectorPath,
-        "",
-        Size(320.0, 320.0),
-        0.8f,
-        0.3f,
-        5000
-    )
+    val detector = try {
+        FaceDetectorYN.create(
+            detectorPath,
+            "",
+            Size(320.0, 320.0),
+            0.8f,
+            0.3f,
+            5000
+        )
+    } catch (exception: CvException) {
+        Log.e("FaceMatchAnalyzer", "OpenCV could not load the FP32 YuNet detector", exception)
+        throw IllegalStateException(
+            "Face detection could not load its model. No student record was saved; please try again.",
+            exception
+        )
+    }
     val rgba = Mat()
     val bgr = Mat()
     val faces = Mat()
@@ -382,8 +399,16 @@ fun validateAndEncodeStudentPhoto(context: Context, bitmap: Bitmap): String {
         Utils.bitmapToMat(bitmap, rgba)
         check(!rgba.empty()) { "The student photo could not be read." }
         Imgproc.cvtColor(rgba, bgr, Imgproc.COLOR_RGBA2BGR)
-        detector.setInputSize(Size(bgr.cols().toDouble(), bgr.rows().toDouble()))
-        detector.detect(bgr, faces)
+        try {
+            detector.setInputSize(Size(bgr.cols().toDouble(), bgr.rows().toDouble()))
+            detector.detect(bgr, faces)
+        } catch (exception: CvException) {
+            Log.e("FaceMatchAnalyzer", "OpenCV failed while detecting a face in the student photo", exception)
+            throw IllegalStateException(
+                "Face detection failed. No student record was saved; retake the photo and try again.",
+                exception
+            )
+        }
         when (faces.rows()) {
             0 -> throw IllegalArgumentException("No face found. Retake the student photo.")
             1 -> Unit

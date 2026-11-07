@@ -142,16 +142,36 @@ class Api internal constructor(
                     response.request.url.encodedPath !in AUTH_PATHS
                 ) {
                     "Session expired"
+                } else if (
+                    response.code == 409 &&
+                    response.request.url.encodedPath == SIGNUP_PATH
+                ) {
+                    "That username is already taken. Choose another or sign in."
                 } else {
-                    json.optString(
-                        "message",
-                        json.optString("error", "Request failed (${response.code})")
-                    )
+                    validationMessage(json)
+                        ?: json.optString(
+                            "message",
+                            json.optString("error", "Request failed (${response.code})")
+                        )
                 }
                 throw IllegalStateException(message)
             }
             return@withContext json
         }
+    }
+
+    private fun validationMessage(json: JSONObject): String? {
+        val details = json.optJSONArray("details") ?: return null
+        val messages = (0 until details.length()).mapNotNull { index ->
+            val detail = details.optJSONObject(index) ?: return@mapNotNull null
+            val field = detail.optString("path")
+                .takeIf(String::isNotBlank)
+                ?.replaceFirstChar(Char::uppercase)
+            val message = detail.optString("message").takeIf(String::isNotBlank)
+                ?: return@mapNotNull null
+            if (field == null) message else "$field: $message"
+        }
+        return if (messages.isEmpty()) null else messages.joinToString("; ")
     }
 
     suspend fun login(username: String, password: String, role: String) {
@@ -179,14 +199,30 @@ class Api internal constructor(
     suspend fun parentChildren() = request("GET", "/api/parent/children").arrayData()
     suspend fun parentTrips() = request("GET", "/api/parent/trips").arrayData()
     suspend fun parentScans(date: String) = request("GET", "/api/parent/scans?date=$date").arrayData()
+    suspend fun parentArrivals(date: String) = request("GET", "/api/parent/arrivals?date=$date").arrayData()
     suspend fun parentEmergencies() = request("GET", "/api/parent/emergencies").arrayData()
+    suspend fun parentLinkRequests() = request("GET", "/api/parent/link-requests").arrayData()
+    suspend fun createParentLinkRequest(studentId: String) = request(
+        "POST",
+        "/api/parent/link-requests",
+        JSONObject().put("studentId", studentId)
+    )
     suspend fun children() = request("GET", "/api/children").arrayData()
     suspend fun trips() = request("GET", "/api/trips").arrayData()
     suspend fun scans(date: String) = request("GET", "/api/scans?date=$date").arrayData()
+    suspend fun arrivals(date: String) = request("GET", "/api/arrivals?date=$date").arrayData()
     suspend fun emergencies() = request("GET", "/api/emergencies").arrayData()
     suspend fun adminOverview() = request("GET", "/api/admin/overview").objectData()
     suspend fun adminParents() = request("GET", "/api/admin/parents").arrayData()
     suspend fun adminParentLinks() = request("GET", "/api/admin/parent-links").arrayData()
+    suspend fun adminParentLinkRequests() =
+        request("GET", "/api/admin/parent-link-requests").arrayData()
+
+    suspend fun reviewParentLinkRequest(id: String, decision: String) = request(
+        "POST",
+        "/api/admin/parent-link-requests/${id.pathSegment()}/review",
+        JSONObject().put("decision", decision)
+    )
 
     suspend fun createParentLink(parentId: String, childId: String) = request(
         "POST",
@@ -293,6 +329,16 @@ class Api internal constructor(
 
     suspend fun endTrip(id: String) = request("POST", "/api/trips/$id/end", JSONObject())
 
+    suspend fun confirmArrival(
+        tripId: String,
+        studentId: String,
+        destination: String
+    ) = request(
+        "POST",
+        "/api/trips/${tripId.pathSegment()}/arrivals",
+        JSONObject().put("studentId", studentId).put("destination", destination)
+    ).getJSONObject("data")
+
     suspend fun scan(
         studentId: String,
         tripId: String,
@@ -323,11 +369,17 @@ class Api internal constructor(
             }
     )
 
-    suspend fun location(tripId: String, lat: Double, lon: Double, accuracy: Float) = request(
+    suspend fun location(
+        tripId: String,
+        lat: Double,
+        lon: Double,
+        accuracy: Float,
+        timestamp: Long = System.currentTimeMillis()
+    ) = request(
         "PUT",
         "/api/trips/$tripId/location",
         JSONObject().put("latitude", lat).put("longitude", lon)
-            .put("accuracy", accuracy).put("timestamp", System.currentTimeMillis())
+            .put("accuracy", accuracy).put("timestamp", timestamp)
     )
 
     suspend fun sos(vehicle: String, driver: String, route: String, lat: Double?, lon: Double?) =
@@ -354,7 +406,8 @@ class Api internal constructor(
         java.net.URLEncoder.encode(this, Charsets.UTF_8.name()).replace("+", "%20")
 
     companion object {
-        private val AUTH_PATHS = setOf("/api/auth/login", "/api/auth/signup")
+        private const val SIGNUP_PATH = "/api/auth/signup"
+        private val AUTH_PATHS = setOf("/api/auth/login", SIGNUP_PATH)
 
         fun today() = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
             .format(java.util.Date())

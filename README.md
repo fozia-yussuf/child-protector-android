@@ -55,9 +55,11 @@ backend/                     Node.js 20, TypeScript, Express, PostgreSQL service
 render.yaml                  Render web service and PostgreSQL Blueprint
 ```
 
-The Android app uses CameraX, OpenCV YuNet/SFace for experimental face matching, Fused Location, and a JavaScript-enabled WebView restricted to embedded Google Maps. Driver GPS runs in a notification-backed foreground service. Realtime events use a bearer-authenticated WebSocket with polling fallback.
+The Android app uses CameraX, OpenCV YuNet/SFace for experimental face matching, Fused Location, and a JavaScript-enabled WebView restricted to embedded Google Maps. YuNet and SFace use FP32 OpenCV Zoo models because OpenCV 4.10.0 cannot import their block-quantized `DequantizeLinear` weights. Driver GPS runs in a notification-backed foreground service. Realtime events use a bearer-authenticated WebSocket with polling fallback.
 
 Face matching has no liveness detection and accuracy can vary. Drivers must confirm boarding, manual overrides are recorded as `MANUAL`, and a match must not be the only safety control.
+
+Administrators can link a parent during student registration or from **More → Parent Access**. Parents can request access to a child with the school student ID from **My Child**; an administrator must verify and approve each request in **Parent Access** before the child is visible. Parents see only linked children, their route's live GPS, and today's boarding and driver-confirmed arrival updates in the app. A driver confirms school/home arrival after recording the corresponding morning/evening boarding scan; linked parents receive the event while connected, with polling fallback if realtime is unavailable. The driver must start an active trip and enable GPS sharing for live coordinates. GPS freshness is based on the time of the device's location fix, so delayed uploads remain marked stale. Push notifications while the app is closed require separate Firebase setup and are not included.
 
 ## Requirements
 
@@ -84,6 +86,11 @@ Open the repository in Android Studio and run the `app` configuration, or from t
 ```
 
 The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
+To refresh the APK file for Google Drive after building, copy it to the repository root:
+
+```powershell
+Copy-Item app\build\outputs\apk\debug\app-debug.apk .\Child_Protector_App.apk -Force
+```
 
 ### Android tests
 
@@ -134,7 +141,7 @@ npm test
 npm run build
 ```
 
-Supertest tests exercise the HTTP API, role isolation, scan-rule ordering, GPS updates, emergency and parent-link CRUD, and WebSocket authentication/filtering.
+Supertest tests exercise the HTTP API, role isolation, student-photo delivery to the driver roster, scan-rule ordering, GPS updates, confirmed-arrival persistence and parent notifications, emergency and parent-link CRUD, and WebSocket authentication/filtering.
 
 ## Deploy to Render
 

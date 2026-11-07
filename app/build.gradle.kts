@@ -25,6 +25,12 @@ android { namespace = "com.childprotector.app"; compileSdk = 35
     }
     buildFeatures { compose = true; buildConfig = true }
     buildTypes { release { isMinifyEnabled = false } }
+    packaging {
+        resources {
+            pickFirsts += "META-INF/LICENSE.md"
+            pickFirsts += "META-INF/LICENSE-notice.md"
+        }
+    }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     defaultConfig { buildConfigField("String", "API_BASE_URL", "\"$apiBaseUrl\"") }
@@ -62,6 +68,8 @@ dependencies {
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.12.01"))
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
+    androidTestImplementation("androidx.test.espresso:espresso-intents:3.7.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("io.mockk:mockk-android:1.13.16")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

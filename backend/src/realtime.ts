@@ -98,6 +98,15 @@ export class RealtimeHub implements EventPublisher {
     if (principal.role === "ADMIN") return true;
 
     if (principal.role === "DRIVER") {
+      if (type === "arrival") {
+        const arrivalId = eventId(data, "id");
+        if (!arrivalId) return false;
+        const result = await this.pool.query(
+          "SELECT 1 FROM trip_arrivals WHERE id = $1 AND confirmed_by = $2",
+          [arrivalId, principal.id]
+        );
+        return Boolean(result.rowCount);
+      }
       if (type === "location" || type.startsWith("trip-")) {
         const tripId = eventId(data, "tripId", "id");
         if (!tripId) return false;
@@ -129,7 +138,7 @@ export class RealtimeHub implements EventPublisher {
       return false;
     }
 
-    if (type === "scan") {
+    if (type === "scan" || type === "arrival") {
       const studentId = eventId(data, "studentId");
       if (!studentId) return false;
       const result = await this.pool.query(

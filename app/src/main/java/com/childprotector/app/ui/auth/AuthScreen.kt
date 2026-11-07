@@ -141,6 +141,15 @@ fun AuthScreen(vm: AppVM) {
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                if (signup) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Username must be 1-80 characters and unused. Password must be 8-256 characters.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                }
+
                 if (vm.message.isNotBlank()) {
                     Spacer(Modifier.height(6.dp))
                     Text(

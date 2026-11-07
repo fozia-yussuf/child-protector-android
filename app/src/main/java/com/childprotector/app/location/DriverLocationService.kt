@@ -62,6 +62,7 @@ class DriverLocationService : Service() {
 
         getSharedPreferences(STATUS_PREFS, MODE_PRIVATE).edit()
             .putBoolean(KEY_RUNNING, true)
+            .putLong(KEY_LAST_UPLOAD, 0L)
             .putString(KEY_ERROR, "")
             .apply()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -93,7 +94,8 @@ class DriverLocationService : Service() {
             locationClient.requestLocationUpdates(request, callback, mainLooper)
                 .addOnFailureListener { exception ->
                     updateStatus(error = "Could not start GPS: ${exception.message ?: "unknown error"}")
-                }
+                        stopSelf()
+                    }
         } catch (exception: SecurityException) {
             updateStatus(error = "Location permission is required.")
             stopSelf()
@@ -116,11 +118,11 @@ class DriverLocationService : Service() {
                             requireNotNull(tripId),
                             location.latitude,
                             location.longitude,
-                            location.accuracy
+                            location.accuracy,
+                            location.time
                         )
-                        val uploadedAt = System.currentTimeMillis()
-                        updateStatus(uploadedAt = uploadedAt, error = "")
-                        updateNotification("Last GPS upload ${formatTime(uploadedAt)}")
+                        updateStatus(uploadedAt = location.time, error = "")
+                        updateNotification("Last GPS fix uploaded ${formatTime(location.time)}")
                         break
                     } catch (cancelled: CancellationException) {
                         throw cancelled

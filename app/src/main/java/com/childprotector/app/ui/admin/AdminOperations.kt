@@ -12,6 +12,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.childprotector.app.*
 import com.childprotector.app.ui.common.*
@@ -465,12 +466,14 @@ private fun EmergencyEditor(
 fun AdminParentAccessScreen(vm: AppVM) {
     var parents by remember { mutableStateOf(emptyList<JSONObject>()) }
     var links by remember { mutableStateOf(emptyList<JSONObject>()) }
+    var requests by remember { mutableStateOf(emptyList<JSONObject>()) }
     var selectedParent by remember { mutableStateOf("") }
     var selectedChild by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf("") }
     var reloadKey by remember { mutableIntStateOf(0) }
     var deleting by remember { mutableStateOf<JSONObject?>(null) }
+    var reviewingRequest by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     LaunchedEffect(reloadKey) {
         loading = true
@@ -478,6 +481,7 @@ fun AdminParentAccessScreen(vm: AppVM) {
         try {
             parents = vm.apiClient().adminParents()
             links = vm.apiClient().adminParentLinks()
+            requests = vm.apiClient().adminParentLinkRequests()
             if (selectedParent.isBlank()) selectedParent = parents.firstOrNull()?.optString("id").orEmpty()
         } catch (exception: Exception) {
             error = exception.message ?: "Could not load parent access."
@@ -504,9 +508,82 @@ fun AdminParentAccessScreen(vm: AppVM) {
                 parents.map { it.optString("id") to it.optString("username", it.optString("name")) },
                 selectedParent
             ) { selectedParent = it; selectedChild = "" }
-            Text("Linked children")
-            if (linked.isEmpty()) Text("No linked children.", color = androidx.compose.ui.graphics.Color.Gray)
             LazyColumn(Modifier.weight(1f)) {
+                item {
+                    Text("Parent link requests", style = MaterialTheme.typography.titleMedium)
+                    if (requests.isEmpty()) {
+                        Text("No link requests.", color = androidx.compose.ui.graphics.Color.Gray)
+                    }
+                }
+                items(requests) { linkRequest ->
+                    val requestId = linkRequest.optString("id")
+                    val studentId = linkRequest.optString("requestedStudentId")
+                    val status = linkRequest.optString("status")
+                    val childId = linkRequest.stringValue("childId").orEmpty()
+                    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Column(Modifier.padding(10.dp)) {
+                            Text(
+                                "${linkRequest.optString("parentUsername")} · student ID $studentId",
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(status)
+                            if (status == "PENDING" && childId.isBlank()) {
+                                Text(
+                                    "No student currently matches this ID. Verify it before approval.",
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            } else if (childId.isNotBlank()) {
+                                Text("${linkRequest.optString("childName")} · ${linkRequest.optString("route")}")
+                            }
+                            if (status == "PENDING") {
+                                Row {
+                                    TextButton(
+                                        enabled = reviewingRequest != requestId && childId.isNotBlank(),
+                                        onClick = {
+                                            scope.launch {
+                                                reviewingRequest = requestId
+                                                error = ""
+                                                try {
+                                                    vm.apiClient().reviewParentLinkRequest(requestId, "APPROVE")
+                                                    reloadKey++
+                                                } catch (exception: Exception) {
+                                                    error = exception.message ?: "Could not approve link request."
+                                                } finally {
+                                                    reviewingRequest = ""
+                                                }
+                                            }
+                                        }
+                                    ) {
+                                        Text(if (reviewingRequest == requestId) "Saving..." else "Approve")
+                                    }
+                                    TextButton(
+                                        enabled = reviewingRequest != requestId,
+                                        onClick = {
+                                            scope.launch {
+                                                reviewingRequest = requestId
+                                                error = ""
+                                                try {
+                                                    vm.apiClient().reviewParentLinkRequest(requestId, "REJECT")
+                                                    reloadKey++
+                                                } catch (exception: Exception) {
+                                                    error = exception.message ?: "Could not reject link request."
+                                                } finally {
+                                                    reviewingRequest = ""
+                                                }
+                                            }
+                                        }
+                                    ) { Text("Reject") }
+                                }
+                            }
+                        }
+                    }
+                }
+                item {
+                    Text("Linked children", style = MaterialTheme.typography.titleMedium)
+                    if (linked.isEmpty()) {
+                        Text("No linked children.", color = androidx.compose.ui.graphics.Color.Gray)
+                    }
+                }
                 items(linked) { link ->
                     val childId = link.stringValue("childId")
                         ?: link.optJSONObject("child")?.optString("id").orEmpty()
@@ -534,7 +611,7 @@ fun AdminParentAccessScreen(vm: AppVM) {
                     }
                 }) { Text("Link child") }
             } else {
-                Text("All students are already linked to this parent.")
+                Text("No unlinked students are available for this parent.")
             }
         }
     }
@@ -545,7 +622,8 @@ fun AdminParentAccessScreen(vm: AppVM) {
                 try {
                     val childId = link.stringValue("childId")
                         ?: link.optJSONObject("child")?.optString("id").orEmpty()
-                    vm.apiClient().deleteParentLink(selectedParent, childId)
+                    val parentId = link.stringValue("parentId") ?: selectedParent
+                    vm.apiClient().deleteParentLink(parentId, childId)
                     deleting = null
                     reloadKey++
                 } catch (exception: Exception) {

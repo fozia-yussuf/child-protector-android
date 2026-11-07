@@ -25,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -89,7 +90,9 @@ class AppVM(private val api: Api) : androidx.lifecycle.ViewModel() {
     var children by mutableStateOf(listOf<JSONObject>())
     var trips by mutableStateOf(listOf<JSONObject>())
     var scans by mutableStateOf(listOf<JSONObject>())
+    var arrivals by mutableStateOf(listOf<JSONObject>())
     var emergencies by mutableStateOf(listOf<JSONObject>())
+    var parentLinkRequests by mutableStateOf(listOf<JSONObject>())
     var selectedChild by mutableStateOf<JSONObject?>(null)
     var adminOverview by mutableStateOf<JSONObject?>(null)
     var realtimeConnected by mutableStateOf(false)
@@ -103,26 +106,41 @@ class AppVM(private val api: Api) : androidx.lifecycle.ViewModel() {
         message = ""
         try {
             if (apiRole() == "PARENT") {
-                children = api.parentChildren()
-                trips = api.parentTrips()
-                scans = api.parentScans(Api.today())
-                emergencies = api.parentEmergencies()
+                val errors = mutableListOf<String>()
+                suspend fun loadParentData(label: String, action: suspend () -> Unit) {
+                    try {
+                        action()
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (exception: Exception) {
+                        errors += "$label: ${exception.message ?: "Could not load data"}"
+                    }
+                }
+                loadParentData("Children") { children = api.parentChildren() }
+                loadParentData("Trips") { trips = api.parentTrips() }
+                loadParentData("Attendance") { scans = api.parentScans(Api.today()) }
+                loadParentData("Arrivals") { arrivals = api.parentArrivals(Api.today()) }
+                loadParentData("Alerts") { emergencies = api.parentEmergencies() }
+                loadParentData("Link requests") { parentLinkRequests = api.parentLinkRequests() }
 
                 selectedChild = selectedChild?.let { x ->
                     children.find {
                         it.optString("id") == x.optString("id")
                     }
                 } ?: children.firstOrNull()
+                message = errors.joinToString(" · ")
             } else if (apiRole() == "ADMIN") {
                 children = api.children()
                 trips = api.trips()
                 scans = api.scans(Api.today())
+                arrivals = api.arrivals(Api.today())
                 emergencies = api.emergencies()
                 adminOverview = api.adminOverview()
             } else {
                 children = api.children()
                 trips = api.trips()
                 scans = api.scans(Api.today())
+                arrivals = api.arrivals(Api.today())
                 emergencies = api.emergencies()
             }
         } catch (cancelled: CancellationException) {
@@ -231,6 +249,7 @@ class AppVM(private val api: Api) : androidx.lifecycle.ViewModel() {
                 }
             }
             type.contains("scan") -> scans = upsert(scans, data.optJSONObject("scan") ?: data)
+            type.contains("arrival") -> arrivals = upsert(arrivals, data.optJSONObject("arrival") ?: data)
             type.contains("emergency") -> emergencies =
                 upsert(emergencies, data.optJSONObject("emergency") ?: data)
             type.contains("trip") -> {
@@ -274,7 +293,9 @@ class AppVM(private val api: Api) : androidx.lifecycle.ViewModel() {
         children = emptyList()
         trips = emptyList()
         scans = emptyList()
+        arrivals = emptyList()
         emergencies = emptyList()
+        parentLinkRequests = emptyList()
         selectedChild = null
         adminOverview = null
         message = ""
@@ -296,6 +317,7 @@ class AppVM(private val api: Api) : androidx.lifecycle.ViewModel() {
                 trips = emptyList()
                 scans = emptyList()
                 emergencies = emptyList()
+                parentLinkRequests = emptyList()
                 selectedChild = null
                 message = "Session expired"
             }
@@ -330,13 +352,11 @@ fun AppRoot() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(vm: AppVM) {
-    var tab by remember { mutableIntStateOf(0) }
-    var adminPage by remember { mutableStateOf("Overview") }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    var adminPage by rememberSaveable { mutableStateOf("Overview") }
     var showAdminMore by remember { mutableStateOf(false) }
 
     LaunchedEffect(vm.role) {
-        tab = 0
-        adminPage = "Overview"
         vm.refresh()
     }
     DisposableEffect(vm.role) {
@@ -418,7 +438,7 @@ fun MainScreen(vm: AppVM) {
                             "My Child" to Icons.Default.Face,
                             "Attendance" to Icons.Default.CheckCircle,
                             "Tracking" to Icons.Default.LocationOn,
-                            "SOS" to Icons.Default.Warning
+                            "Alerts" to Icons.Default.Notifications
                         )
                     }
 

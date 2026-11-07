@@ -43,6 +43,7 @@ class AppVMTest {
         coEvery { api.children() } returns children
         coEvery { api.trips() } returns trips
         coEvery { api.scans(any()) } returns scans
+        coEvery { api.arrivals(any()) } returns emptyList()
         coEvery { api.emergencies() } returns emergencies
         val viewModel = AppVM(api).apply { role = "DRIVER" }
 
@@ -74,7 +75,9 @@ class AppVMTest {
         coEvery { api.parentChildren() } returns listOf(child)
         coEvery { api.parentTrips() } returns emptyList()
         coEvery { api.parentScans(any()) } returns emptyList()
+        coEvery { api.parentArrivals(any()) } returns emptyList()
         coEvery { api.parentEmergencies() } returns emptyList()
+        coEvery { api.parentLinkRequests() } returns emptyList()
         val viewModel = AppVM(api).apply { role = "PARENT" }
 
         viewModel.refresh()
@@ -82,5 +85,23 @@ class AppVMTest {
         assertTrue(viewModel.children.single() === child)
         assertTrue(viewModel.selectedChild === child)
         coVerify(exactly = 1) { api.parentChildren() }
+    }
+
+    @Test
+    fun parentRefreshContinuesLoadingAlertsWhenArrivalEndpointFails() = runTest(dispatcher) {
+        val emergency = JSONObject("""{"id":"emergency-1"}""")
+        coEvery { api.parentChildren() } returns emptyList()
+        coEvery { api.parentTrips() } returns emptyList()
+        coEvery { api.parentScans(any()) } returns emptyList()
+        coEvery { api.parentArrivals(any()) } throws IOException("arrivals not deployed")
+        coEvery { api.parentEmergencies() } returns listOf(emergency)
+        coEvery { api.parentLinkRequests() } returns emptyList()
+        val viewModel = AppVM(api).apply { role = "PARENT" }
+
+        viewModel.refresh()
+
+        assertTrue(viewModel.emergencies.single() === emergency)
+        assertTrue(viewModel.message.contains("Arrivals: arrivals not deployed"))
+        assertFalse(viewModel.loading)
     }
 }

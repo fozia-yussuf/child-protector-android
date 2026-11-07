@@ -58,7 +58,13 @@ const locationFields = z.object({
   latitude: z.number().finite().min(-90).max(90),
   longitude: z.number().finite().min(-180).max(180),
   accuracy: z.number().finite().min(0).max(100_000),
-  timestamp: z.number().int().positive().optional()
+  timestamp: z.number().int().positive().max(8_640_000_000_000_000).optional()
+}).strict();
+const arrivalFields = z.object({
+  studentId: idSchema,
+  destination: z.enum(["SCHOOL", "HOME"]),
+  ...coordinatesSchema,
+  accuracy: z.number().finite().min(0).max(100_000).optional()
 }).strict();
 const emergencyCreateFields = z.object({
   vehicle: z.string().trim().min(1).max(100),
@@ -76,6 +82,12 @@ const emergencyUpdateFields = z.object({
 const linkFields = z.object({
   parentId: idSchema,
   childId: idSchema
+}).strict();
+const parentLinkRequestFields = z.object({
+  studentId: z.string().trim().min(1).max(80)
+}).strict();
+const parentLinkReviewFields = z.object({
+  decision: z.enum(["APPROVE", "REJECT"])
 }).strict();
 
 const childSelect = `
@@ -102,6 +114,14 @@ const emergencySelect = `
   SELECT e.id, e.vehicle, e.driver, e.route, e.description, e.status,
          e.latitude, e.longitude, e.created_at AS "createdAt",
          e.updated_at AS "updatedAt" FROM emergencies e`;
+const arrivalSelect = `
+  SELECT a.id, a.student_id AS "studentId", c.name AS "studentName",
+         a.trip_id AS "tripId", t.route, t.vehicle, t.driver,
+         a.destination, a.arrival_date AS "arrivalDate",
+         a.latitude, a.longitude, a.accuracy, a.arrived_at AS "arrivedAt"
+  FROM trip_arrivals a
+  JOIN children c ON c.id = a.student_id
+  JOIN trips t ON t.id = a.trip_id`;
 
 function principal(request: Request): Principal {
   return (request as Request & { principal: Principal }).principal;
@@ -245,6 +265,43 @@ export function registerRoutes(app: Application, pool: Pool, options: RouteOptio
     data(response, rows(result));
   }));
 
+  app.get("/api/parent/link-requests", requireRoles("PARENT"), asyncRoute(async (request, response) => {
+    const result = await pool.query(
+      `SELECT requested_student_id AS "studentId", status,
+         created_at AS "createdAt", updated_at AS "updatedAt"
+       FROM parent_link_requests
+       WHERE parent_id = $1
+       ORDER BY created_at DESC`,
+      [principal(request).id]
+    );
+    data(response, rows(result));
+  }));
+
+  app.post("/api/parent/link-requests", requireRoles("PARENT"), asyncRoute(async (request, response) => {
+    const input = jsonBody(parentLinkRequestFields, request);
+    const user = principal(request);
+    const existingLink = await pool.query(
+      `SELECT 1 FROM parent_links pl
+       JOIN children c ON c.id = pl.child_id
+       WHERE pl.parent_id = $1 AND c.student_id = $2`,
+      [user.id, input.studentId]
+    );
+    if (existingLink.rowCount) {
+      throw new HttpError(409, "This child is already linked to your account.");
+    }
+    const result = await pool.query(
+      `INSERT INTO parent_link_requests
+         (id, parent_id, requested_student_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (parent_id, requested_student_id) DO UPDATE
+         SET status = 'PENDING', updated_at = NOW(), reviewed_at = NULL
+       RETURNING requested_student_id AS "studentId", status,
+                 created_at AS "createdAt", updated_at AS "updatedAt"`,
+      [randomUUID(), user.id, input.studentId]
+    );
+    data(response, result.rows[0], 201);
+  }));
+
   app.get("/api/parent/trips", requireRoles("PARENT"), asyncRoute(async (request, response) => {
     const user = principal(request);
     const result = await pool.query(
@@ -270,12 +327,41 @@ export function registerRoutes(app: Application, pool: Pool, options: RouteOptio
     data(response, rows(result));
   }));
 
+  app.get("/api/parent/arrivals", requireRoles("PARENT"), asyncRoute(async (request, response) => {
+    const date = validateDate(request.query.date);
+    const result = await pool.query(
+      `${arrivalSelect}
+       JOIN parent_links pl ON pl.child_id = a.student_id
+       WHERE pl.parent_id = $1 AND a.arrival_date = $2
+       ORDER BY a.arrived_at DESC`,
+      [principal(request).id, date]
+    );
+    data(response, rows(result));
+  }));
+
+  app.get("/api/arrivals", requireRoles("ADMIN", "DRIVER"), asyncRoute(async (request, response) => {
+    const date = validateDate(request.query.date);
+    const user = principal(request);
+    const result = user.role === "ADMIN"
+      ? await pool.query(
+          `${arrivalSelect} WHERE a.arrival_date = $1 ORDER BY a.arrived_at DESC`,
+          [date]
+        )
+      : await pool.query(
+          `${arrivalSelect}
+           WHERE a.arrival_date = $1 AND a.confirmed_by = $2
+           ORDER BY a.arrived_at DESC`,
+          [date, user.id]
+        );
+    data(response, rows(result));
+  }));
+
   app.get("/api/parent/emergencies", requireRoles("PARENT"), asyncRoute(async (request, response) => {
     const result = await pool.query(
       `${emergencySelect.replace("SELECT", "SELECT DISTINCT")}
        JOIN children c ON lower(c.route) = lower(e.route)
        JOIN parent_links pl ON pl.child_id = c.id
-       WHERE pl.parent_id = $1
+       WHERE pl.parent_id = $1 AND e.status = 'OPEN'
        ORDER BY e.created_at DESC`,
       [principal(request).id]
     );
@@ -321,6 +407,69 @@ export function registerRoutes(app: Application, pool: Pool, options: RouteOptio
        ORDER BY a.username, c.name`
     );
     data(response, rows(result));
+  }));
+
+  app.get("/api/admin/parent-link-requests", requireRoles("ADMIN"), asyncRoute(async (_request, response) => {
+    const result = await pool.query(
+      `SELECT r.id, r.parent_id AS "parentId", a.username AS "parentUsername",
+         r.requested_student_id AS "requestedStudentId", r.status,
+         r.created_at AS "createdAt", c.id AS "childId", c.name AS "childName",
+         c.route
+       FROM parent_link_requests r
+       JOIN accounts a ON a.id = r.parent_id
+       LEFT JOIN children c ON c.student_id = r.requested_student_id
+       ORDER BY CASE r.status WHEN 'PENDING' THEN 0 ELSE 1 END, r.created_at DESC`
+    );
+    data(response, rows(result));
+  }));
+
+  app.post("/api/admin/parent-link-requests/:id/review", requireRoles("ADMIN"), asyncRoute(async (request, response) => {
+    const id = idParam(request);
+    const input = jsonBody(parentLinkReviewFields, request);
+    const result = await withTransaction(pool, async (client) => {
+      const requestResult = await client.query<{
+        id: string;
+        parent_id: string;
+        requested_student_id: string;
+        status: string;
+      }>(
+        `SELECT id, parent_id, requested_student_id, status
+         FROM parent_link_requests WHERE id = $1 FOR UPDATE`,
+        [id]
+      );
+      const linkRequest = requestResult.rows[0];
+      if (!linkRequest) throw notFound("Parent link request not found");
+      if (linkRequest.status !== "PENDING") {
+        throw new HttpError(409, "Parent link request has already been reviewed");
+      }
+
+      let childId: string | null = null;
+      if (input.decision === "APPROVE") {
+        const child = await client.query<{ id: string }>(
+          "SELECT id FROM children WHERE student_id = $1",
+          [linkRequest.requested_student_id]
+        );
+        if (!child.rowCount) {
+          throw notFound("No student found with this ID. Verify the ID or reject the request.");
+        }
+        childId = child.rows[0].id;
+        await client.query(
+          `INSERT INTO parent_links (parent_id, child_id) VALUES ($1, $2)
+           ON CONFLICT (parent_id, child_id) DO NOTHING`,
+          [linkRequest.parent_id, childId]
+        );
+      }
+
+      const reviewed = await client.query(
+        `UPDATE parent_link_requests
+         SET status = $2, updated_at = NOW(), reviewed_at = NOW()
+         WHERE id = $1
+         RETURNING id, status`,
+        [id, input.decision === "APPROVE" ? "APPROVED" : "REJECTED"]
+      );
+      return { ...reviewed.rows[0], childId };
+    });
+    data(response, result);
   }));
 
   app.post("/api/admin/parent-links", requireRoles("ADMIN"), asyncRoute(async (request, response) => {
@@ -492,14 +641,15 @@ export function registerRoutes(app: Application, pool: Pool, options: RouteOptio
     const id = idParam(request);
     const input = jsonBody(locationFields, request);
     await assertDriverOwnsTrip(pool, principal(request), id);
+    const fixTimestamp = new Date(Math.min(input.timestamp ?? Date.now(), Date.now()));
     const result = await pool.query(
       `UPDATE trips SET latitude = $2, longitude = $3, accuracy = $4,
-       location_updated_at = NOW()
+       location_updated_at = $5
        WHERE id = $1 AND status = 'ACTIVE'
        RETURNING id, route, vehicle, driver, trip_type AS "tripType", status,
                  latitude, longitude, accuracy,
                  location_updated_at AS "locationUpdatedAt"`,
-      [id, input.latitude, input.longitude, input.accuracy]
+      [id, input.latitude, input.longitude, input.accuracy, fixTimestamp]
     );
     if (!result.rowCount) throw notFound("Active trip not found");
     const trip = result.rows[0] as Record<string, unknown>;
@@ -595,6 +745,66 @@ export function registerRoutes(app: Application, pool: Pool, options: RouteOptio
     });
     data(response, saved, 201);
     options.events.publish("scan", saved);
+  }));
+
+  app.post("/api/trips/:id/arrivals", requireRoles("DRIVER"), asyncRoute(async (request, response) => {
+    const tripId = idParam(request);
+    const input = jsonBody(arrivalFields, request);
+    const user = principal(request);
+    await assertDriverOwnsTrip(pool, user, tripId);
+    const saved = await withTransaction(pool, async (client) => {
+      const tripResult = await client.query<{ id: string; route: string; status: string }>(
+        "SELECT id, route, status FROM trips WHERE id = $1",
+        [tripId]
+      );
+      const trip = tripResult.rows[0];
+      if (!trip) throw notFound("Trip not found");
+      if (trip.status !== "ACTIVE") throw new HttpError(409, "Trip is not active");
+
+      const studentResult = await client.query<{ id: string; name: string; route: string }>(
+        "SELECT id, name, route FROM children WHERE id = $1",
+        [input.studentId]
+      );
+      const student = studentResult.rows[0];
+      if (!student) throw notFound("Student not found");
+      if (student.route.trim().toLowerCase() !== trip.route.trim().toLowerCase()) {
+        throw new HttpError(409, "Student route does not match the trip route");
+      }
+
+      const requiredPhase = input.destination === "SCHOOL" ? "MORNING" : "EVENING";
+      const boarding = await client.query(
+        `SELECT 1 FROM scans
+         WHERE student_id = $1 AND trip_id = $2 AND scan_date = $3
+           AND upper(phase) LIKE $4
+         LIMIT 1`,
+        [student.id, trip.id, currentDate(), `%${requiredPhase}%`]
+      );
+      if (!boarding.rowCount) {
+        throw new HttpError(409, `Record the ${requiredPhase.toLowerCase()} boarding scan before confirming arrival`);
+      }
+
+      const result = await client.query(
+        `INSERT INTO trip_arrivals
+          (id, student_id, trip_id, destination, arrival_date, confirmed_by,
+           latitude, longitude, accuracy)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id, student_id AS "studentId", trip_id AS "tripId",
+           destination, arrival_date AS "arrivalDate",
+           latitude, longitude, accuracy, arrived_at AS "arrivedAt"`,
+        [
+          randomUUID(), student.id, trip.id, input.destination, currentDate(), user.id,
+          input.latitude ?? null, input.longitude ?? null, input.accuracy ?? null
+        ]
+      );
+      return {
+        ...result.rows[0],
+        studentName: studentResult.rows[0].name,
+        route: trip.route,
+        id: result.rows[0].id
+      } as Record<string, unknown>;
+    });
+    data(response, saved, 201);
+    options.events.publish("arrival", saved);
   }));
 
   app.get("/api/scans/:id", requireRoles("ADMIN"), asyncRoute(async (request, response) => {

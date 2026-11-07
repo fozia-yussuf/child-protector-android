@@ -343,6 +343,23 @@ describe("Child Protector API", () => {
   });
 
   describe("parent isolation", () => {
+    test("registering a student can link its parent and the driver roster returns the saved photo", async () => {
+      const child = await createChild(fixture, { parentUsername: "parent1" });
+
+      const roster = await authed(fixture, fixture.driverToken)
+        .get("/api/children").expect(200);
+      expect(roster.body.data).toEqual([
+        expect.objectContaining({
+          id: child.id,
+          photo: "data:image/jpeg;base64,ZmFrZS1pbWFnZQ=="
+        })
+      ]);
+
+      const parentChildren = await authed(fixture, fixture.parentToken)
+        .get("/api/parent/children").expect(200);
+      expect(parentChildren.body.data.map((row: { id: string }) => row.id)).toEqual([child.id]);
+    });
+
     test("parent endpoints return only linked children, route trips, scans, and emergencies", async () => {
       const childA = await createChild(fixture, { route: "Route A" });
       const childB = await createChild(fixture, { route: "Route B" });
@@ -367,6 +384,16 @@ describe("Child Protector API", () => {
           description: "Route A alert", latitude: 10, longitude: 20
         })
         .expect(201);
+      const closedAlert = await authed(fixture, fixture.driverToken)
+        .post("/api/emergencies")
+        .send({
+          vehicle: "BUS-A", driver: "driver1", route: "Route A",
+          description: "Resolved Route A alert", latitude: 30, longitude: 40
+        })
+        .expect(201);
+      await authed(fixture, fixture.adminToken)
+        .put(`/api/emergencies/${closedAlert.body.data.id}`)
+        .send({ status: "RESOLVED" }).expect(200);
       await authed(fixture, fixture.driverToken)
         .post("/api/emergencies")
         .send({
@@ -389,7 +416,12 @@ describe("Child Protector API", () => {
 
       const emergencies = await authed(fixture, fixture.parentToken)
         .get("/api/parent/emergencies").expect(200);
-      expect(emergencies.body.data.map((row: { route: string }) => row.route)).toEqual(["Route A"]);
+      expect(emergencies.body.data.map((row: { description: string }) => row.description))
+        .toEqual(["Route A alert"]);
+
+      const arrivals = await authed(fixture, fixture.parentToken)
+        .get(`/api/parent/arrivals?date=${today()}`).expect(200);
+      expect(arrivals.body.data).toEqual([]);
 
       const secondParentChildren = await authed(fixture, fixture.secondParentToken)
         .get("/api/parent/children").expect(200);
@@ -397,22 +429,88 @@ describe("Child Protector API", () => {
     });
   });
 
+  describe("student arrival notifications", () => {
+    test("driver confirms a scanned student's arrival and the linked parent can view it", async () => {
+      const child = await createChild(fixture, { route: "Route A" });
+      const link = {
+        parentId: await parentId(fixture, "parent1"),
+        childId: String(child.id)
+      };
+      await authed(fixture, fixture.adminToken)
+        .post("/api/admin/parent-links").send(link).expect(201);
+      const trip = await createTrip(fixture, fixture.driverToken, "Route A");
+      await authed(fixture, fixture.driverToken)
+        .post("/api/scan")
+        .send(scanBody(String(child.id), String(trip.id), { scanMethod: "MANUAL" }))
+        .expect(201);
+
+      const response = await authed(fixture, fixture.driverToken)
+        .post(`/api/trips/${trip.id}/arrivals`)
+        .send({
+          studentId: child.id,
+          destination: "SCHOOL",
+          latitude: 1.3,
+          longitude: 103.8,
+          accuracy: 5
+        })
+        .expect(201);
+      expect(response.body.data).toMatchObject({
+        studentId: child.id,
+        studentName: "Sample Student",
+        tripId: trip.id,
+        destination: "SCHOOL",
+        route: "Route A"
+      });
+      expect(fixture.events.publish).toHaveBeenCalledWith(
+        "arrival",
+        expect.objectContaining({ studentId: child.id, destination: "SCHOOL" })
+      );
+
+      const parentArrivals = await authed(fixture, fixture.parentToken)
+        .get(`/api/parent/arrivals?date=${today()}`).expect(200);
+      expect(parentArrivals.body.data).toEqual([
+        expect.objectContaining({ studentId: child.id, destination: "SCHOOL" })
+      ]);
+      const driverArrivals = await authed(fixture, fixture.driverToken)
+        .get(`/api/arrivals?date=${today()}`).expect(200);
+      expect(driverArrivals.body.data).toEqual([
+        expect.objectContaining({ studentId: child.id, destination: "SCHOOL" })
+      ]);
+    });
+
+    test("requires the matching boarding scan before confirming arrival", async () => {
+      const child = await createChild(fixture);
+      const trip = await createTrip(fixture);
+      const response = await authed(fixture, fixture.driverToken)
+        .post(`/api/trips/${trip.id}/arrivals`)
+        .send({ studentId: child.id, destination: "SCHOOL" })
+        .expect(409);
+      expect(response.body.message).toContain("boarding scan");
+    });
+  });
+
   describe("trip location", () => {
     test("driver can update an owned active trip location and broadcasts the location", async () => {
       const trip = await createTrip(fixture);
+      const fixTimestamp = Date.now() - 180_000;
       const response = await authed(fixture, fixture.driverToken)
         .put(`/api/trips/${trip.id}/location`)
-        .send({ latitude: 1.25, longitude: 103.8, accuracy: 5, timestamp: Date.now() })
+        .send({ latitude: 1.25, longitude: 103.8, accuracy: 5, timestamp: fixTimestamp })
         .expect(200);
       expect(response.body.data).toMatchObject({
         latitude: 1.25,
         longitude: 103.8,
         accuracy: 5
       });
-      expect(response.body.data.locationUpdatedAt).toBeTruthy();
+      expect(Date.parse(response.body.data.locationUpdatedAt)).toBe(fixTimestamp);
       expect(fixture.events.publish).toHaveBeenCalledWith(
         "location",
-        expect.objectContaining({ tripId: trip.id, latitude: 1.25, longitude: 103.8 })
+        expect.objectContaining({
+          tripId: trip.id,
+          latitude: 1.25,
+          longitude: 103.8,
+          timestamp: new Date(fixTimestamp)
+        })
       );
     });
 
@@ -497,6 +595,81 @@ describe("Child Protector API", () => {
   });
 
   describe("parent-link administration", () => {
+    test("parent requests a child link and an admin approval grants access", async () => {
+      const child = await createChild(fixture, { studentId: "STUDENT-REQUEST-1" });
+      await authed(fixture, fixture.parentToken)
+        .post("/api/parent/link-requests")
+        .send({ studentId: "STUDENT-REQUEST-1" })
+        .expect(201)
+        .expect(({ body }) => expect(body.data.status).toBe("PENDING"));
+
+      const ownRequests = await authed(fixture, fixture.parentToken)
+        .get("/api/parent/link-requests").expect(200);
+      expect(ownRequests.body.data).toEqual([
+        expect.objectContaining({ studentId: "STUDENT-REQUEST-1", status: "PENDING" })
+      ]);
+      await authed(fixture, fixture.secondParentToken)
+        .get("/api/parent/link-requests").expect(200, { data: [] });
+
+      const queue = await authed(fixture, fixture.adminToken)
+        .get("/api/admin/parent-link-requests").expect(200);
+      const linkRequest = queue.body.data.find(
+        (item: { requestedStudentId: string }) => item.requestedStudentId === "STUDENT-REQUEST-1"
+      );
+      expect(linkRequest).toMatchObject({
+        parentUsername: "parent1",
+        childId: child.id,
+        childName: child.name,
+        status: "PENDING"
+      });
+
+      await authed(fixture, fixture.parentToken)
+        .post(`/api/admin/parent-link-requests/${linkRequest.id}/review`)
+        .send({ decision: "APPROVE" }).expect(403);
+      await authed(fixture, fixture.adminToken)
+        .post(`/api/admin/parent-link-requests/${linkRequest.id}/review`)
+        .send({ decision: "APPROVE" }).expect(200, {
+          data: { id: linkRequest.id, status: "APPROVED", childId: child.id }
+        });
+
+      const children = await authed(fixture, fixture.parentToken)
+        .get("/api/parent/children").expect(200);
+      expect(children.body.data).toEqual([expect.objectContaining({ id: child.id })]);
+      await authed(fixture, fixture.parentToken)
+        .post("/api/parent/link-requests")
+        .send({ studentId: "STUDENT-REQUEST-1" })
+        .expect(409, {
+          error: "This child is already linked to your account.",
+          message: "This child is already linked to your account."
+        });
+      const finalRequests = await authed(fixture, fixture.parentToken)
+        .get("/api/parent/link-requests").expect(200);
+      expect(finalRequests.body.data[0].status).toBe("APPROVED");
+    });
+
+    test("admin cannot approve an unknown student ID and can reject the request", async () => {
+      await authed(fixture, fixture.parentToken)
+        .post("/api/parent/link-requests")
+        .send({ studentId: "UNKNOWN-STUDENT" }).expect(201);
+      const queue = await authed(fixture, fixture.adminToken)
+        .get("/api/admin/parent-link-requests").expect(200);
+      const linkRequest = queue.body.data.find(
+        (item: { requestedStudentId: string }) => item.requestedStudentId === "UNKNOWN-STUDENT"
+      );
+      expect(linkRequest.childId).toBeNull();
+      await authed(fixture, fixture.adminToken)
+        .post(`/api/admin/parent-link-requests/${linkRequest.id}/review`)
+        .send({ decision: "APPROVE" }).expect(404);
+      await authed(fixture, fixture.adminToken)
+        .post(`/api/admin/parent-link-requests/${linkRequest.id}/review`)
+        .send({ decision: "REJECT" }).expect(200, {
+          data: { id: linkRequest.id, status: "REJECTED", childId: null }
+        });
+      const ownRequests = await authed(fixture, fixture.parentToken)
+        .get("/api/parent/link-requests").expect(200);
+      expect(ownRequests.body.data[0].status).toBe("REJECTED");
+    });
+
     test("creates and removes a link and rejects non-parent accounts", async () => {
       const child = await createChild(fixture);
       const parentIdValue = await parentId(fixture, "parent1");
@@ -563,6 +736,19 @@ describe("Child Protector API", () => {
           expect(received.some((message) => message.startsWith("parent:"))).toBe(true);
           expect(received.some((message) => message.startsWith("driver:"))).toBe(true);
           expect(received.some((message) => message.startsWith("unrelated:"))).toBe(false);
+          await authed(fixture, fixture.driverToken)
+            .post("/api/scan")
+            .send(scanBody(String(child.id), String(trip.id), { scanMethod: "MANUAL" }))
+            .expect(201);
+          const arrival = await authed(fixture, fixture.driverToken)
+            .post(`/api/trips/${trip.id}/arrivals`)
+            .send({ studentId: child.id, destination: "SCHOOL" })
+            .expect(201);
+          hub.publish("arrival", arrival.body.data);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          expect(received.some((message) => message.startsWith("parent:") && message.includes('"type":"arrival"'))).toBe(true);
+          expect(received.some((message) => message.startsWith("driver:") && message.includes('"type":"arrival"'))).toBe(true);
+          expect(received.some((message) => message.startsWith("unrelated:") && message.includes('"type":"arrival"'))).toBe(false);
           const unauthorized = connect();
           await expect(open(unauthorized)).rejects.toBeDefined();
           unauthorized.terminate();
